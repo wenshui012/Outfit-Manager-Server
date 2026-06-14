@@ -1,0 +1,7 @@
+{
+  "name": "outfit-manager-server",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "main": "index.js",
+  "description": "Server-side storage backend for the Outfit Manager extension (穿搭管理器)."
+}
