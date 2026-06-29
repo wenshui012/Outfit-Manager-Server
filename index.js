@@ -241,9 +241,28 @@ async function externalizePartitionImages(key, data) {
             }
         }
     } else {
-        // outfit partition: 扫描 outfits 数组
+        // outfit partition: 扫描 outfits 和 accessories 数组
         if (Array.isArray(data.outfits)) {
             for (const o of data.outfits) {
+                if (!o || typeof o !== 'object') continue;
+                const v = o.imageData;
+                if (typeof v !== 'string' || !v) continue;
+
+                if (v.startsWith(IMAGE_URL_PREFIX)) {
+                    const name = path.basename(v);
+                    if (isValidImageName(name)) referenced.add(name);
+                    continue;
+                }
+
+                const result = await storeBase64Image(v);
+                if (result) {
+                    o.imageData = result.url;
+                    referenced.add(result.name);
+                }
+            }
+        }
+        if (Array.isArray(data.accessories)) {
+            for (const o of data.accessories) {
                 if (!o || typeof o !== 'object') continue;
                 const v = o.imageData;
                 if (typeof v !== 'string' || !v) continue;
@@ -291,24 +310,27 @@ async function externalizeAllImages(data) {
         }
     };
 
-    // User outfits
+    // User outfits/accessories
     await processOutfits(data.outfits);
+    await processOutfits(data.accessories);
 
-    // Char outfits
+    // Char outfits/accessories
     if (data.chars && typeof data.chars === 'object') {
         for (const k of Object.keys(data.chars)) {
             const c = data.chars[k];
-            if (c && Array.isArray(c.outfits)) {
+            if (c) {
                 await processOutfits(c.outfits);
+                await processOutfits(c.accessories);
             }
         }
     }
 
-    // Presets
+    // Presets outfits/accessories
     if (Array.isArray(data.presets)) {
         for (const p of data.presets) {
-            if (p && Array.isArray(p.outfits)) {
+            if (p) {
                 await processOutfits(p.outfits);
+                await processOutfits(p.accessories);
             }
         }
     }
@@ -354,6 +376,8 @@ async function migrateFromLegacy(legacyData) {
         outfits: legacyData.outfits || [],
         categories: legacyData.categories || [],
         activeIds: Array.isArray(legacyData.activeIds) ? legacyData.activeIds : [],
+        accessories: legacyData.accessories || [],
+        accCategories: legacyData.accCategories || [],
     };
     await writePartFile('user:__default__', userDefault);
 
@@ -375,6 +399,8 @@ async function migrateFromLegacy(legacyData) {
                 outfits: p.outfits || [],
                 categories: p.categories || [],
                 activeIds: p.activeIds || [],
+                accessories: p.accessories || [],
+                accCategories: p.accCategories || [],
             };
             await writePartFile(partKey, pPart);
         }
@@ -393,6 +419,8 @@ async function migrateFromLegacy(legacyData) {
                     outfits: userDefault.outfits,
                     categories: userDefault.categories,
                     activeIds: userDefault.activeIds,
+                    accessories: userDefault.accessories,
+                    accCategories: userDefault.accCategories,
                 });
                 break;
             }
@@ -429,6 +457,8 @@ async function migrateFromLegacy(legacyData) {
             outfits: scd.outfits || [],
             categories: scd.categories || [],
             activeIds: scd.activeIds || [],
+            accessories: scd.accessories || [],
+            accCategories: scd.accCategories || [],
         };
         meta.charIndex.push({ id: '__shared__', name: '__shared__', partKey: 'char:__shared__' });
         await writePartFile('char:__shared__', sharedPart);
@@ -442,11 +472,13 @@ async function migrateFromLegacy(legacyData) {
         const cid = 'c_' + crypto.randomBytes(4).toString('hex').slice(0, 8);
         nameToId[name] = cid;
         const partKey = 'char:' + cid;
-        const cd = (legacyData.chars && legacyData.chars[name]) || { outfits: [], categories: [], activeIds: [] };
+        const cd = (legacyData.chars && legacyData.chars[name]) || { outfits: [], categories: [], activeIds: [], accessories: [], accCategories: [] };
         const charPart = {
             outfits: cd.outfits || [],
             categories: cd.categories || [],
             activeIds: cd.activeIds || [],
+            accessories: cd.accessories || [],
+            accCategories: cd.accCategories || [],
         };
         meta.charIndex.push({ id: cid, name: name, partKey: partKey });
         await writePartFile(partKey, charPart);
@@ -550,23 +582,39 @@ async function reassembleFullData() {
             if (pi.id === meta.activePresetId) { activeUserPartKey = pi.partKey; break; }
         }
     }
-    const activeUserPart = (await readPartFile(activeUserPartKey)) || { outfits: [], categories: [], activeIds: [] };
+    const activeUserPart = (await readPartFile(activeUserPartKey)) || {
+        outfits: [],
+        categories: [],
+        activeIds: [],
+        accessories: [],
+        accCategories: [],
+    };
     d.outfits = activeUserPart.outfits || [];
     d.categories = activeUserPart.categories || [];
     d.activeIds = activeUserPart.activeIds || [];
+    d.accessories = activeUserPart.accessories || [];
+    d.accCategories = activeUserPart.accCategories || [];
 
     // 预设
     d.presets = [];
     d.activePresetId = meta.activePresetId || null;
     if (Array.isArray(meta.presets)) {
         for (const pi of meta.presets) {
-            const pp = (await readPartFile(pi.partKey)) || { outfits: [], categories: [], activeIds: [] };
+            const pp = (await readPartFile(pi.partKey)) || {
+                outfits: [],
+                categories: [],
+                activeIds: [],
+                accessories: [],
+                accCategories: [],
+            };
             d.presets.push({
                 id: pi.id,
                 name: pi.name,
                 outfits: pp.outfits || [],
                 categories: pp.categories || [],
                 activeIds: pp.activeIds || [],
+                accessories: pp.accessories || [],
+                accCategories: pp.accCategories || [],
             });
         }
     }
@@ -580,12 +628,30 @@ async function reassembleFullData() {
     if (Array.isArray(meta.charIndex)) {
         for (const ci of meta.charIndex) {
             if (ci.id !== '__shared__') idToName[ci.id] = ci.name;
-            const cp = (await readPartFile(ci.partKey)) || { outfits: [], categories: [], activeIds: [] };
+            const cp = (await readPartFile(ci.partKey)) || {
+                outfits: [],
+                categories: [],
+                activeIds: [],
+                accessories: [],
+                accCategories: [],
+            };
             if (ci.id === '__shared__') {
-                d.chars['__shared__'] = { outfits: cp.outfits || [], categories: cp.categories || [], activeIds: cp.activeIds || [] };
+                d.chars['__shared__'] = {
+                    outfits: cp.outfits || [],
+                    categories: cp.categories || [],
+                    activeIds: cp.activeIds || [],
+                    accessories: cp.accessories || [],
+                    accCategories: cp.accCategories || [],
+                };
             } else {
                 d.charNames.push(ci.name);
-                d.chars[ci.name] = { outfits: cp.outfits || [], categories: cp.categories || [], activeIds: cp.activeIds || [] };
+                d.chars[ci.name] = {
+                    outfits: cp.outfits || [],
+                    categories: cp.categories || [],
+                    activeIds: cp.activeIds || [],
+                    accessories: cp.accessories || [],
+                    accCategories: cp.accCategories || [],
+                };
             }
         }
     }
@@ -635,6 +701,8 @@ async function splitFullDataToPartitions(data) {
         outfits: data.outfits || [],
         categories: data.categories || [],
         activeIds: Array.isArray(data.activeIds) ? data.activeIds : [],
+        accessories: data.accessories || [],
+        accCategories: data.accCategories || [],
     };
     await writePartFile('user:__default__', userDefault);
 
@@ -655,6 +723,8 @@ async function splitFullDataToPartitions(data) {
                 outfits: p.outfits || [],
                 categories: p.categories || [],
                 activeIds: p.activeIds || [],
+                accessories: p.accessories || [],
+                accCategories: p.accCategories || [],
             });
         }
     }
@@ -669,6 +739,8 @@ async function splitFullDataToPartitions(data) {
                     outfits: userDefault.outfits,
                     categories: userDefault.categories,
                     activeIds: userDefault.activeIds,
+                    accessories: userDefault.accessories,
+                    accCategories: userDefault.accCategories,
                 });
                 break;
             }
@@ -707,6 +779,8 @@ async function splitFullDataToPartitions(data) {
             outfits: scd.outfits || [],
             categories: scd.categories || [],
             activeIds: scd.activeIds || [],
+            accessories: scd.accessories || [],
+            accCategories: scd.accCategories || [],
         };
         meta.charIndex.push({ id: '__shared__', name: '__shared__', partKey: 'char:__shared__' });
         await writePartFile('char:__shared__', sharedPart);
@@ -725,11 +799,13 @@ async function splitFullDataToPartitions(data) {
         }
         nameToId[name] = ci.id;
         meta.charIndex.push(ci);
-        const cd = (data.chars && data.chars[name]) || { outfits: [], categories: [], activeIds: [] };
+        const cd = (data.chars && data.chars[name]) || { outfits: [], categories: [], activeIds: [], accessories: [], accCategories: [] };
         const charPart = {
             outfits: cd.outfits || [],
             categories: cd.categories || [],
             activeIds: cd.activeIds || [],
+            accessories: cd.accessories || [],
+            accCategories: cd.accCategories || [],
         };
         await writePartFile(ci.partKey, charPart);
         if (charPart.activeIds.length > 0) {
@@ -815,6 +891,7 @@ async function collectAllReferences() {
         } else {
             // outfit partition
             collectFromOutfits(data.outfits);
+            collectFromOutfits(data.accessories);
         }
     }
 
